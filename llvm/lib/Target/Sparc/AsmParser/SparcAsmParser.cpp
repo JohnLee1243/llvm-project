@@ -73,10 +73,9 @@ class SparcAsmParser : public MCTargetAsmParser {
                                OperandVector &Operands, MCStreamer &Out,
                                uint64_t &ErrorInfo,
                                bool MatchingInlineAsm) override;
-  bool parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
-                     SMLoc &EndLoc) override;
-  OperandMatchResultTy tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
-                                        SMLoc &EndLoc) override;
+  bool parseRegister(MCRegister &Reg, SMLoc &StartLoc, SMLoc &EndLoc) override;
+  ParseStatus tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
+                               SMLoc &EndLoc) override;
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
   ParseStatus parseDirective(AsmToken DirectiveID) override;
@@ -801,31 +800,30 @@ bool SparcAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   llvm_unreachable("Implement any new match types added!");
 }
 
-bool SparcAsmParser::parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+bool SparcAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
                                    SMLoc &EndLoc) {
-  if (tryParseRegister(RegNo, StartLoc, EndLoc) != MatchOperand_Success)
+  if (!tryParseRegister(Reg, StartLoc, EndLoc).isSuccess())
     return Error(StartLoc, "invalid register name");
   return false;
 }
 
-OperandMatchResultTy SparcAsmParser::tryParseRegister(MCRegister &RegNo,
-                                                      SMLoc &StartLoc,
-                                                      SMLoc &EndLoc) {
+ParseStatus SparcAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
+                                             SMLoc &EndLoc) {
   const AsmToken &Tok = Parser.getTok();
   StartLoc = Tok.getLoc();
   EndLoc = Tok.getEndLoc();
-  RegNo = 0;
+  Reg = Sparc::NoRegister;
   if (getLexer().getKind() != AsmToken::Percent)
-    return MatchOperand_NoMatch;
+    return ParseStatus::NoMatch;
   Parser.Lex();
   unsigned regKind = SparcOperand::rk_None;
-  if (matchRegisterName(Tok, RegNo, regKind)) {
+  if (matchRegisterName(Tok, Reg, regKind)) {
     Parser.Lex();
-    return MatchOperand_Success;
+    return ParseStatus::Success;
   }
 
   getLexer().UnLex(Tok);
-  return MatchOperand_NoMatch;
+  return ParseStatus::NoMatch;
 }
 
 static void applyMnemonicAliases(StringRef &Mnemonic,
@@ -1263,44 +1261,16 @@ SparcAsmParser::parseSparcAsmOperand(std::unique_ptr<SparcOperand> &Op,
 
   case AsmToken::Percent: {
     Parser.Lex(); // Eat the '%'.
-    MCRegister RegNo;
+    MCRegister Reg;
     unsigned RegKind;
-    if (matchRegisterName(Parser.getTok(), RegNo, RegKind)) {
-      StringRef name = Parser.getTok().getString();
+    if (matchRegisterName(Parser.getTok(), Reg, RegKind)) {
+      StringRef Name = Parser.getTok().getString();
       Parser.Lex(); // Eat the identifier token.
       E = SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
-      switch (RegNo) {
-      default:
-        Op = SparcOperand::CreateReg(RegNo, RegKind, S, E);
-        break;
-      case Sparc::PSR:
-        Op = SparcOperand::CreateToken("%psr", S);
-        break;
-      case Sparc::FSR:
-        Op = SparcOperand::CreateToken("%fsr", S);
-        break;
-      case Sparc::FQ:
-        Op = SparcOperand::CreateToken("%fq", S);
-        break;
-      case Sparc::CPSR:
-        Op = SparcOperand::CreateToken("%csr", S);
-        break;
-      case Sparc::CPQ:
-        Op = SparcOperand::CreateToken("%cq", S);
-        break;
-      case Sparc::WIM:
-        Op = SparcOperand::CreateToken("%wim", S);
-        break;
-      case Sparc::TBR:
-        Op = SparcOperand::CreateToken("%tbr", S);
-        break;
-      case Sparc::ICC:
-        if (name == "xcc")
-          Op = SparcOperand::CreateToken("%xcc", S);
-        else
-          Op = SparcOperand::CreateToken("%icc", S);
-        break;
-      }
+      if (Reg == Sparc::ICC && Name == "xcc")
+        Op = SparcOperand::CreateToken("%xcc", S);
+      else
+        Op = SparcOperand::CreateReg(Reg, RegKind, S, E);
       break;
     }
     if (matchSparcAsmModifiers(EVal, E)) {
